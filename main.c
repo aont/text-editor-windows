@@ -2,11 +2,19 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <windowsx.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #pragma comment(lib, "comctl32.lib")
+
+#ifndef EM_SETBKGNDCOLOR
+#define EM_SETBKGNDCOLOR 0x0443
+#endif
+#ifndef EM_REDO
+#define EM_REDO 0x0454
+#endif
 
 #define IDC_TAB 1001
 #define IDC_EDIT 1002
