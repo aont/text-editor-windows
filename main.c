@@ -2097,6 +2097,29 @@ static void LayoutChildren(HWND hwnd) {
     }
 }
 
+static bool IsPointInTabHeaderGap(POINT screenPt) {
+    if (!g_hwndTab) return false;
+    RECT tabWndRect;
+    if (!GetWindowRect(g_hwndTab, &tabWndRect)) return false;
+    if (!PtInRect(&tabWndRect, screenPt)) return false;
+
+    POINT tabPt = screenPt;
+    ScreenToClient(g_hwndTab, &tabPt);
+
+    RECT tabClient;
+    GetClientRect(g_hwndTab, &tabClient);
+    RECT pageRect = tabClient;
+    TabCtrl_AdjustRect(g_hwndTab, FALSE, &pageRect);
+    int headerBottom = max_int(0, min_int((int)tabClient.bottom, (int)pageRect.top));
+    if (tabPt.y < 0 || tabPt.y >= headerBottom) return false;
+
+    TCHITTESTINFO ht;
+    ZeroMemory(&ht, sizeof(ht));
+    ht.pt = tabPt;
+    int tabIndex = TabCtrl_HitTest(g_hwndTab, &ht);
+    return tabIndex < 0;
+}
+
 static void OnCommand(HWND hwnd, int id) {
     TabDoc* doc = CurrentDoc();
     HWND edit = doc ? doc->edit : NULL;
@@ -2692,6 +2715,14 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         PaintMenuTabSeam(hwnd);
         if (g_hwndStatus) RedrawWindow(g_hwndStatus, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
         return 0;
+    case WM_NCHITTEST: {
+        LRESULT hit = DefWindowProcW(hwnd, msg, wParam, lParam);
+        if (hit == HTCLIENT) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (IsPointInTabHeaderGap(pt)) return HTCAPTION;
+        }
+        return hit;
+    }
     case WM_DPICHANGED: {
         RECT* suggested = (RECT*)lParam;
         if (suggested) {
