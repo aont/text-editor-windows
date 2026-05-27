@@ -19,6 +19,9 @@
 #define IDC_TAB 1001
 #define IDC_EDIT 1002
 #define IDC_STATUS 1003
+#define IDC_MENU_FILE 1004
+#define IDC_MENU_EDIT 1005
+#define IDC_MENU_VIEW 1006
 #define IDC_ENC_COMBO 2001
 #define IDC_EOL_COMBO 2002
 
@@ -67,6 +70,8 @@ typedef struct {
 
 static HINSTANCE g_hInst;
 static HWND g_hwndTab, g_hwndEdit, g_hwndStatus;
+static HWND g_hwndMenuFile, g_hwndMenuEdit, g_hwndMenuView;
+static HMENU g_popupFile, g_popupEdit, g_popupView;
 static ThemeMode g_theme = THEME_AUTO;
 static BOOL g_dark = FALSE;
 static HFONT g_font;
@@ -93,7 +98,15 @@ static void ApplyTheme(HWND hwnd){
     InvalidateRect(hwnd,NULL,TRUE);
     InvalidateRect(g_hwndTab,NULL,TRUE);
     InvalidateRect(g_hwndStatus,NULL,TRUE);
-    DrawMenuBar(hwnd);
+}
+
+static int TabBarHeight(){ return 32; }
+static int MenuBarHeight(){ return 32; }
+
+static void ShowTopMenu(HWND hwnd, HWND btn, HMENU menu){
+    RECT rc;
+    GetWindowRect(btn, &rc);
+    TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, 0, hwnd, NULL);
 }
 
 static void UpdateStatus(){
@@ -158,16 +171,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l){
     switch(msg){
     case WM_CREATE:{
         g_dpi=GetDpiForWindow(hwnd);
-        g_hwndTab=CreateWindowExA(0,WC_TABCONTROLA,"",WS_CHILD|WS_VISIBLE|TCS_FIXEDWIDTH,0,0,100,30,hwnd,(HMENU)IDC_TAB,g_hInst,NULL);
-        g_hwndEdit=CreateWindowExA(0,"EDIT","",WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_HSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_AUTOHSCROLL,0,32,100,100,hwnd,(HMENU)IDC_EDIT,g_hInst,NULL);
+        g_hwndTab=CreateWindowExA(0,WC_TABCONTROLA,"",WS_CHILD|WS_VISIBLE|TCS_FIXEDWIDTH,0,0,100,TabBarHeight(),hwnd,(HMENU)IDC_TAB,g_hInst,NULL);
+        g_hwndMenuFile=CreateWindowExA(0,"BUTTON","File",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,8,TabBarHeight()+4,70,24,hwnd,(HMENU)IDC_MENU_FILE,g_hInst,NULL);
+        g_hwndMenuEdit=CreateWindowExA(0,"BUTTON","Edit",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,86,TabBarHeight()+4,70,24,hwnd,(HMENU)IDC_MENU_EDIT,g_hInst,NULL);
+        g_hwndMenuView=CreateWindowExA(0,"BUTTON","View",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,164,TabBarHeight()+4,70,24,hwnd,(HMENU)IDC_MENU_VIEW,g_hInst,NULL);
+        g_hwndEdit=CreateWindowExA(0,"EDIT","",WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_HSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_AUTOHSCROLL,0,TabBarHeight()+MenuBarHeight(),100,100,hwnd,(HMENU)IDC_EDIT,g_hInst,NULL);
         g_hwndStatus=CreateWindowExA(0,"STATIC","",WS_CHILD|WS_VISIBLE|SS_LEFT,0,0,100,24,hwnd,(HMENU)IDC_STATUS,g_hInst,NULL);
         SendMessage(g_hwndEdit,WM_SETFONT,(WPARAM)GetStockObject(DEFAULT_GUI_FONT),TRUE);
         NewTab(); ApplyTheme(hwnd);
     } break;
-    case WM_SIZE:{ int wdt=LOWORD(l), h=HIWORD(l); MoveWindow(g_hwndTab,0,0,wdt,32,TRUE); MoveWindow(g_hwndStatus,0,h-24,wdt,24,TRUE); MoveWindow(g_hwndEdit,0,32,wdt,h-56,TRUE);} break;
+    case WM_SIZE:{ int wdt=LOWORD(l), h=HIWORD(l); int top=TabBarHeight()+MenuBarHeight(); MoveWindow(g_hwndTab,0,0,wdt,TabBarHeight(),TRUE); MoveWindow(g_hwndStatus,0,h-24,wdt,24,TRUE); MoveWindow(g_hwndEdit,0,top,wdt,h-top-24,TRUE);} break;
     case WM_NOTIFY: if(((LPNMHDR)l)->idFrom==IDC_TAB && ((LPNMHDR)l)->code==TCN_SELCHANGE) SwitchTab(TabCtrl_GetCurSel(g_hwndTab)); break;
     case WM_COMMAND:{
         switch(LOWORD(w)){
+        case IDC_MENU_FILE: ShowTopMenu(hwnd, g_hwndMenuFile, g_popupFile); break;
+        case IDC_MENU_EDIT: ShowTopMenu(hwnd, g_hwndMenuEdit, g_popupEdit); break;
+        case IDC_MENU_VIEW: ShowTopMenu(hwnd, g_hwndMenuView, g_popupView); break;
         case ID_FILE_NEW_TAB: NewTab(); break; case ID_FILE_OPEN: DoOpenSave(FALSE); break; case ID_FILE_SAVE: DoOpenSave(TRUE); break; case ID_FILE_SAVE_AS: DoOpenSave(TRUE); break;
         case ID_FILE_CLOSE_TAB: if(g_tabCount>1){ free(g_tabs[g_activeTab].text); TabCtrl_DeleteItem(g_hwndTab,g_activeTab); for(int i=g_activeTab;i<g_tabCount-1;i++)g_tabs[i]=g_tabs[i+1]; g_tabCount--; SwitchTab(max(0,g_activeTab-1)); } break;
         case ID_FILE_NEW_WINDOW: ShellExecuteA(NULL,"open",GetCommandLineA(),NULL,NULL,SW_SHOWNORMAL); break; case ID_FILE_CLOSE_WINDOW: DestroyWindow(hwnd); break; case ID_FILE_EXIT: PostQuitMessage(0); break;
@@ -183,7 +202,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l){
     } break;
     case WM_CTLCOLOREDIT: case WM_CTLCOLORSTATIC:{ HDC dc=(HDC)w; SetTextColor(dc,fg()); SetBkColor(dc,(HWND)l==g_hwndStatus?panel():bg()); static HBRUSH b1,b2; if(b1)DeleteObject(b1); if(b2)DeleteObject(b2); b1=CreateSolidBrush(bg()); b2=CreateSolidBrush(panel()); return (LRESULT)((HWND)l==g_hwndStatus?b2:b1);} break;
     case WM_CONTEXTMENU: if((HWND)w==g_hwndEdit){ HMENU m=CreatePopupMenu(); AppendMenuA(m,MF_STRING,ID_EDIT_UNDO,"Undo"); AppendMenuA(m,MF_STRING,ID_EDIT_CUT,"Cut"); AppendMenuA(m,MF_STRING,ID_EDIT_COPY,"Copy"); AppendMenuA(m,MF_STRING,ID_EDIT_PASTE,"Paste"); AppendMenuA(m,MF_STRING,ID_EDIT_SELECT_ALL,"Select All"); TrackPopupMenu(m,TPM_RIGHTBUTTON,GET_X_LPARAM(l),GET_Y_LPARAM(l),0,hwnd,NULL); DestroyMenu(m);} break;
-    case WM_NCHITTEST:{ LRESULT ht=DefWindowProc(hwnd,msg,w,l); if(ht==HTCLIENT){ POINT p={GET_X_LPARAM(l),GET_Y_LPARAM(l)}; ScreenToClient(hwnd,&p); if(p.y<32){ HWND c=ChildWindowFromPoint(hwnd,p); if(c!=g_hwndTab) return HTCAPTION; }} return ht; }
+    case WM_NCHITTEST:{
+        LRESULT ht=DefWindowProc(hwnd,msg,w,l);
+        if(ht==HTCLIENT){
+            POINT p={GET_X_LPARAM(l),GET_Y_LPARAM(l)};
+            ScreenToClient(hwnd,&p);
+            if(p.y < TabBarHeight() + MenuBarHeight()){
+                HWND c=ChildWindowFromPoint(hwnd,p);
+                if(c==g_hwndTab || c==hwnd) return HTCAPTION;
+                if(c!=g_hwndMenuFile && c!=g_hwndMenuEdit && c!=g_hwndMenuView) return HTCAPTION;
+            }
+        }
+        return ht;
+    }
     case WM_DESTROY: PostQuitMessage(0); break;
     }
     return DefWindowProc(hwnd,msg,w,l);
@@ -205,10 +236,17 @@ static HMENU BuildMenu(){
     return m;
 }
 
+static void InitMenus(){
+    HMENU m=BuildMenu();
+    g_popupFile = GetSubMenu(m, 0);
+    g_popupEdit = GetSubMenu(m, 1);
+    g_popupView = GetSubMenu(m, 2);
+}
+
 int WINAPI WinMain(HINSTANCE h,HINSTANCE p,LPSTR cmd,int n){
     (void)p;(void)cmd; INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_TAB_CLASSES}; InitCommonControlsEx(&ic); SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    g_hInst=h; WNDCLASSA wc={0}; wc.lpfnWndProc=WndProc; wc.hInstance=h; wc.hCursor=LoadCursor(NULL,IDC_ARROW); wc.hbrBackground=CreateSolidBrush(RGB(30,30,30)); wc.lpszClassName="PlainEditorWnd";
+    g_hInst=h; InitMenus(); WNDCLASSA wc={0}; wc.lpfnWndProc=WndProc; wc.hInstance=h; wc.hCursor=LoadCursor(NULL,IDC_ARROW); wc.hbrBackground=CreateSolidBrush(RGB(30,30,30)); wc.lpszClassName="PlainEditorWnd";
     RegisterClassA(&wc);
-    HWND hwnd=CreateWindowExA(0,"PlainEditorWnd","Plain Text Editor",WS_POPUP|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SIZEBOX,100,100,1100,700,NULL,BuildMenu(),h,NULL);
+    HWND hwnd=CreateWindowExA(0,"PlainEditorWnd","Plain Text Editor",WS_POPUP|WS_THICKFRAME|WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_SIZEBOX,100,100,1100,700,NULL,NULL,h,NULL);
     ShowWindow(hwnd,n); UpdateWindow(hwnd); MSG msg; while(GetMessage(&msg,NULL,0,0)){ TranslateMessage(&msg); DispatchMessage(&msg);} return 0;
 }
