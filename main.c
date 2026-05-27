@@ -54,6 +54,15 @@
 #ifndef PROCESS_PER_MONITOR_DPI_AWARE
 #define PROCESS_PER_MONITOR_DPI_AWARE 2
 #endif
+#ifndef SM_CXPADDEDBORDER
+#define SM_CXPADDEDBORDER 92
+#endif
+
+#define CAPTION_BUTTON_NONE  -1
+#define CAPTION_BUTTON_MIN    0
+#define CAPTION_BUTTON_MAX    1
+#define CAPTION_BUTTON_CLOSE  2
+#define CAPTION_BUTTON_COUNT  3
 
 static const wchar_t* RICHEDIT50W_CLASS_NAME = L"RICHEDIT50W";
 static const wchar_t* RICHEDIT20W_CLASS_NAME = L"RichEdit20W";
@@ -212,6 +221,8 @@ static HINSTANCE g_hInst = NULL;
 static HWND g_hwndMain = NULL;
 static HWND g_hwndTab = NULL;
 static HWND g_hwndStatus = NULL;
+static HWND g_hwndMenuBar = NULL;
+static HMENU g_hMainMenu = NULL;
 static HMENU g_hRecentMenu = NULL;
 static HMODULE g_hRichEdit = NULL;
 static const wchar_t* g_richEditClass = L"RICHEDIT50W";
@@ -240,6 +251,12 @@ static wchar_t* g_iniPath = NULL;
 static wchar_t* g_langPath = NULL;
 static wchar_t g_languageCode[16] = L"ja";
 static WStrVec g_initialFiles = {0};
+static int g_captionHot = CAPTION_BUTTON_NONE;
+static int g_captionDown = CAPTION_BUTTON_NONE;
+static int g_menuHot = -1;
+static int g_menuActive = -1;
+static BOOL g_trackingMainMouse = FALSE;
+static BOOL g_trackingMenuMouse = FALSE;
 
 static UINT g_findMsg = 0;
 static FINDREPLACEW g_findReplace;
@@ -251,6 +268,7 @@ static DWORD g_lastFindFlags = FR_DOWN;
 
 
 static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK OptionDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK InputDialogProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static UINT_PTR CALLBACK FileDialogHookProc(HWND hdlg, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -269,7 +287,24 @@ static void SaveAppSettings(void);
 static void ApplyThemeToApp(void);
 static void ApplyThemeToMenus(HMENU menu);
 static void PrepareOwnerDrawMenu(HMENU menu, bool topLevel);
-static void PaintMenuBarBackgroundRemainder(HWND hwnd);
+static HMENU GetAppMenu(void);
+static void RecreateMainMenu(void);
+static void PrepareMenuForDisplay(void);
+static void OnCommand(HWND hwnd, int id);
+static int GetSystemMetricsDpiSafe(HWND hwnd, int index);
+static int GetTitleTabHeight(HWND hwnd);
+static int GetCustomMenuBarHeight(HWND hwnd);
+static int GetCaptionButtonAreaWidth(HWND hwnd);
+static void GetCaptionButtonRect(HWND hwnd, int button, RECT* out);
+static int HitTestCaptionButton(HWND hwnd, POINT ptClient);
+static void InvalidateCaptionButton(HWND hwnd, int button);
+static void PaintCustomTitleBar(HWND hwnd, HDC hdc);
+static LRESULT HitTestCustomFrame(HWND hwnd, LPARAM lParam);
+static bool TabPointIsInDraggableTitleArea(HWND hwnd, POINT pt);
+static void ShowSystemMenuAt(HWND hwnd, POINT ptScreen);
+static int MenuBarItemFromPoint(HWND hwnd, POINT pt);
+static void ShowMenuBarPopup(HWND hwnd, int index);
+static bool ShowMenuBarPopupForMnemonic(HWND hwnd, wchar_t ch);
 static void PaintMenuTabSeam(HWND hwnd);
 static void PaintTabTopSeam(HWND hwnd, HDC hdc);
 static void PaintTabDarkBorders(HWND hwnd, HDC hdc);
@@ -525,6 +560,18 @@ static UINT GetWindowDpiSafe(HWND hwnd) {
 
 static int DpiScale(HWND hwnd, int value) {
     return MulDiv(value, (int)GetWindowDpiSafe(hwnd), 96);
+}
+
+static int GetSystemMetricsDpiSafe(HWND hwnd, int index) {
+    UINT dpi = GetWindowDpiSafe(hwnd);
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        typedef int (WINAPI *GetSystemMetricsForDpiProc)(int, UINT);
+        GetSystemMetricsForDpiProc pGetSystemMetricsForDpi =
+            (GetSystemMetricsForDpiProc)(void*)GetProcAddress(user32, "GetSystemMetricsForDpi");
+        if (pGetSystemMetricsForDpi) return pGetSystemMetricsForDpi(index, dpi);
+    }
+    return GetSystemMetrics(index);
 }
 
 static void EnsureDefaultFont(void) {
@@ -1270,6 +1317,433 @@ static void UpdateRecentMenu(void) {
     PrepareOwnerDrawMenu(g_hRecentMenu, false);
 }
 
+
+static HMENU GetAppMenu(void) {
+    return g_hMainMenu;
+}
+
+static void PrepareMenuForDisplay(void) {
+    if (!g_hMainMenu) RecreateMainMenu();
+    UpdateMenuChecks(g_hMainMenu);
+    ApplyThemeToMenus(g_hMainMenu);
+}
+
+static void RecreateMainMenu(void) {
+    if (g_hMainMenu) {
+        DestroyMenu(g_hMainMenu);
+        g_hMainMenu = NULL;
+        g_hRecentMenu = NULL;
+    }
+    FreeMenuDrawData();
+    g_hMainMenu = CreateMainMenu();
+    UpdateRecentMenu();
+    UpdateMenuChecks(g_hMainMenu);
+    ApplyThemeToMenus(g_hMainMenu);
+    if (g_hwndMenuBar) InvalidateRect(g_hwndMenuBar, NULL, TRUE);
+}
+
+static int GetTitleTabHeight(HWND hwnd) {
+    int caption = GetSystemMetricsDpiSafe(hwnd, SM_CYCAPTION);
+    return max_int(DpiScale(hwnd, 34), caption + DpiScale(hwnd, 8));
+}
+
+static int GetCustomMenuBarHeight(HWND hwnd) {
+    return max_int(DpiScale(hwnd, 26), GetSystemMetricsDpiSafe(hwnd, SM_CYMENU));
+}
+
+static int GetCaptionButtonWidth(HWND hwnd) {
+    return max_int(DpiScale(hwnd, 46), GetSystemMetricsDpiSafe(hwnd, SM_CXSIZE));
+}
+
+static int GetCaptionButtonAreaWidth(HWND hwnd) {
+    return GetCaptionButtonWidth(hwnd) * CAPTION_BUTTON_COUNT;
+}
+
+static void GetCaptionButtonRect(HWND hwnd, int button, RECT* out) {
+    if (!out) return;
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int bw = GetCaptionButtonWidth(hwnd);
+    int h = GetTitleTabHeight(hwnd);
+    out->top = 0;
+    out->bottom = h;
+    out->left = rc.right - (CAPTION_BUTTON_COUNT - button) * bw;
+    out->right = out->left + bw;
+    if (out->left < 0) out->left = 0;
+    if (out->right < out->left) out->right = out->left;
+}
+
+static int HitTestCaptionButton(HWND hwnd, POINT ptClient) {
+    for (int i = 0; i < CAPTION_BUTTON_COUNT; ++i) {
+        RECT rc;
+        GetCaptionButtonRect(hwnd, i, &rc);
+        if (PtInRect(&rc, ptClient)) return i;
+    }
+    return CAPTION_BUTTON_NONE;
+}
+
+static void InvalidateCaptionButton(HWND hwnd, int button) {
+    if (!hwnd) return;
+    if (button == CAPTION_BUTTON_NONE) {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        rc.left = max_int(0, rc.right - GetCaptionButtonAreaWidth(hwnd));
+        rc.bottom = GetTitleTabHeight(hwnd);
+        InvalidateRect(hwnd, &rc, TRUE);
+        return;
+    }
+    RECT rc;
+    GetCaptionButtonRect(hwnd, button, &rc);
+    InvalidateRect(hwnd, &rc, TRUE);
+}
+
+static COLORREF ThemeTitleBarBg(void) {
+    return ShouldUseDarkTheme() ? RGB(31, 31, 31) : GetSysColor(COLOR_BTNFACE);
+}
+
+static COLORREF ThemeCaptionButtonBg(int button, bool hot, bool down) {
+    if (!hot) return ThemeTitleBarBg();
+    if (button == CAPTION_BUTTON_CLOSE) return down ? RGB(153, 32, 21) : RGB(196, 43, 28);
+    if (down) return ShouldUseDarkTheme() ? RGB(82, 82, 82) : RGB(210, 210, 210);
+    return ThemeMenuHotBg();
+}
+
+static void PaintCustomTitleBar(HWND hwnd, HDC hdc) {
+    if (!hwnd || !hdc) return;
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int titleH = GetTitleTabHeight(hwnd);
+    RECT titleRc = rc;
+    titleRc.left = max_int(0, rc.right - GetCaptionButtonAreaWidth(hwnd));
+    titleRc.bottom = min_int(titleRc.bottom, titleH);
+    if (titleRc.bottom <= titleRc.top || titleRc.right <= titleRc.left) return;
+
+    HBRUSH bg = CreateSolidBrush(ThemeTitleBarBg());
+    FillRect(hdc, &titleRc, bg ? bg : (HBRUSH)(COLOR_BTNFACE + 1));
+    if (bg) DeleteObject(bg);
+
+    int penWidth = max_int(1, DpiScale(hwnd, 1));
+    for (int button = 0; button < CAPTION_BUTTON_COUNT; ++button) {
+        RECT br;
+        GetCaptionButtonRect(hwnd, button, &br);
+        bool hot = (g_captionHot == button);
+        bool down = (g_captionDown == button && hot);
+        HBRUSH b = CreateSolidBrush(ThemeCaptionButtonBg(button, hot, down));
+        FillRect(hdc, &br, b ? b : (HBRUSH)(COLOR_BTNFACE + 1));
+        if (b) DeleteObject(b);
+
+        COLORREF glyph = (button == CAPTION_BUTTON_CLOSE && hot) ? RGB(255, 255, 255) : ThemeTextColor();
+        HPEN pen = CreatePen(PS_SOLID, penWidth, glyph);
+        HPEN oldPen = pen ? (HPEN)SelectObject(hdc, pen) : NULL;
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        int cx = br.left + (br.right - br.left) / 2;
+        int cy = br.top + (br.bottom - br.top) / 2;
+        int sz = DpiScale(hwnd, 10);
+        if (button == CAPTION_BUTTON_MIN) {
+            MoveToEx(hdc, cx - sz / 2, cy + sz / 3, NULL);
+            LineTo(hdc, cx + sz / 2, cy + sz / 3);
+        } else if (button == CAPTION_BUTTON_MAX) {
+            if (IsZoomed(hwnd)) {
+                Rectangle(hdc, cx - sz / 2 + DpiScale(hwnd, 3), cy - sz / 2, cx + sz / 2, cy + sz / 2 - DpiScale(hwnd, 3));
+                Rectangle(hdc, cx - sz / 2, cy - sz / 2 + DpiScale(hwnd, 3), cx + sz / 2 - DpiScale(hwnd, 3), cy + sz / 2);
+            } else {
+                Rectangle(hdc, cx - sz / 2, cy - sz / 2, cx + sz / 2, cy + sz / 2);
+            }
+        } else if (button == CAPTION_BUTTON_CLOSE) {
+            MoveToEx(hdc, cx - sz / 2, cy - sz / 2, NULL);
+            LineTo(hdc, cx + sz / 2, cy + sz / 2);
+            MoveToEx(hdc, cx + sz / 2, cy - sz / 2, NULL);
+            LineTo(hdc, cx - sz / 2, cy + sz / 2);
+        }
+        SelectObject(hdc, oldBrush);
+        if (pen) {
+            SelectObject(hdc, oldPen);
+            DeleteObject(pen);
+        }
+    }
+
+    HPEN sep = CreatePen(PS_SOLID, 1, ThemeBorderColor());
+    if (sep) {
+        HPEN oldPen = (HPEN)SelectObject(hdc, sep);
+        MoveToEx(hdc, titleRc.left, titleRc.bottom - 1, NULL);
+        LineTo(hdc, titleRc.right, titleRc.bottom - 1);
+        SelectObject(hdc, oldPen);
+        DeleteObject(sep);
+    }
+}
+
+static LRESULT HitTestCustomFrame(HWND hwnd, LPARAM lParam) {
+    POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+    RECT wr;
+    GetWindowRect(hwnd, &wr);
+    if (!IsZoomed(hwnd)) {
+        int borderX = max_int(1, GetSystemMetricsDpiSafe(hwnd, SM_CXSIZEFRAME) + GetSystemMetricsDpiSafe(hwnd, SM_CXPADDEDBORDER));
+        int borderY = max_int(1, GetSystemMetricsDpiSafe(hwnd, SM_CYSIZEFRAME) + GetSystemMetricsDpiSafe(hwnd, SM_CXPADDEDBORDER));
+        bool left = pt.x >= wr.left && pt.x < wr.left + borderX;
+        bool right = pt.x < wr.right && pt.x >= wr.right - borderX;
+        bool top = pt.y >= wr.top && pt.y < wr.top + borderY;
+        bool bottom = pt.y < wr.bottom && pt.y >= wr.bottom - borderY;
+        if (top && left) return HTTOPLEFT;
+        if (top && right) return HTTOPRIGHT;
+        if (bottom && left) return HTBOTTOMLEFT;
+        if (bottom && right) return HTBOTTOMRIGHT;
+        if (top) return HTTOP;
+        if (bottom) return HTBOTTOM;
+        if (left) return HTLEFT;
+        if (right) return HTRIGHT;
+    }
+    return HTCLIENT;
+}
+
+static bool IsResizeHitTest(LRESULT hit) {
+    return hit == HTLEFT || hit == HTRIGHT || hit == HTTOP || hit == HTBOTTOM ||
+        hit == HTTOPLEFT || hit == HTTOPRIGHT || hit == HTBOTTOMLEFT || hit == HTBOTTOMRIGHT;
+}
+
+static bool MainScreenPointHitsResizeBorder(HWND hwnd, LPARAM lParam) {
+    return hwnd && IsResizeHitTest(HitTestCustomFrame(hwnd, lParam));
+}
+
+static bool TabPointIsInDraggableTitleArea(HWND hwnd, POINT pt) {
+    if (!hwnd) return false;
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    if (pt.x < rc.left || pt.x >= rc.right || pt.y < rc.top || pt.y >= rc.bottom) return false;
+    int count = TabCtrl_GetItemCount(hwnd);
+    for (int i = 0; i < count; ++i) {
+        RECT item;
+        if (TabCtrl_GetItemRect(hwnd, i, &item)) {
+            InflateRect(&item, DpiScale(hwnd, 2), DpiScale(hwnd, 2));
+            if (PtInRect(&item, pt)) return false;
+        }
+    }
+    return true;
+}
+
+static void ShowSystemMenuAt(HWND hwnd, POINT ptScreen) {
+    HMENU menu = GetSystemMenu(hwnd, FALSE);
+    if (!menu) return;
+    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, ptScreen.x, ptScreen.y, 0, hwnd, NULL);
+    if (cmd) SendMessageW(hwnd, WM_SYSCOMMAND, (WPARAM)cmd, 0);
+}
+
+static wchar_t UpperAscii(wchar_t ch) {
+    if (ch >= L'a' && ch <= L'z') return ch - 32;
+    return ch;
+}
+
+static bool GetTopMenuItemText(int index, wchar_t* out, int chars) {
+    if (!out || chars <= 0) return false;
+    out[0] = 0;
+    HMENU menu = GetAppMenu();
+    if (!menu) return false;
+    MENUITEMINFOW info;
+    ZeroMemory(&info, sizeof(info));
+    info.cbSize = sizeof(info);
+    info.fMask = MIIM_FTYPE | MIIM_DATA;
+    if (GetMenuItemInfoW(menu, index, TRUE, &info) && (info.fType & MFT_OWNERDRAW) && info.dwItemData) {
+        MenuDrawData* data = (MenuDrawData*)info.dwItemData;
+        if (data && data->text) {
+            wcsncpy(out, data->text, (size_t)chars - 1);
+            out[chars - 1] = 0;
+            return true;
+        }
+    }
+    return GetMenuStringW(menu, index, out, chars, MF_BYPOSITION) > 0;
+}
+
+static bool MenuTextHasMnemonic(const wchar_t* text, wchar_t ch) {
+    if (!text) return false;
+    wchar_t want = UpperAscii(ch);
+    for (const wchar_t* p = text; *p; ++p) {
+        if (*p == L'&' && p[1]) {
+            if (p[1] == L'&') { ++p; continue; }
+            if (UpperAscii(p[1]) == want) return true;
+        }
+    }
+    return false;
+}
+
+static int MenuBarItemWidth(HWND hwnd, const wchar_t* text) {
+    SIZE sz = { 40, 16 };
+    HDC hdc = GetDC(hwnd ? hwnd : g_hwndMain);
+    if (hdc) {
+        HFONT oldFont = (HFONT)SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+        if (text && text[0]) GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &sz);
+        SelectObject(hdc, oldFont);
+        ReleaseDC(hwnd ? hwnd : g_hwndMain, hdc);
+    }
+    return max_int(DpiScale(hwnd, 42), sz.cx + DpiScale(hwnd, 24));
+}
+
+static bool GetMenuBarItemRect(HWND hwnd, int index, RECT* out) {
+    if (!out || !GetAppMenu()) return false;
+    int count = GetMenuItemCount(GetAppMenu());
+    if (index < 0 || index >= count) return false;
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int x = DpiScale(hwnd, 4);
+    for (int i = 0; i <= index; ++i) {
+        wchar_t text[256];
+        GetTopMenuItemText(i, text, 256);
+        int w = MenuBarItemWidth(hwnd, text);
+        if (i == index) {
+            out->left = x;
+            out->right = min_int(rc.right, x + w);
+            out->top = 0;
+            out->bottom = GetCustomMenuBarHeight(hwnd);
+            return out->right > out->left;
+        }
+        x += w;
+    }
+    return false;
+}
+
+static int MenuBarItemFromPoint(HWND hwnd, POINT pt) {
+    HMENU menu = GetAppMenu();
+    if (!menu) return -1;
+    int count = GetMenuItemCount(menu);
+    for (int i = 0; i < count; ++i) {
+        RECT rc;
+        if (GetMenuBarItemRect(hwnd, i, &rc) && PtInRect(&rc, pt)) return i;
+    }
+    return -1;
+}
+
+static void PaintMenuBarControl(HWND hwnd, HDC hdc) {
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    FillRect(hdc, &rc, g_hMenuBrush ? g_hMenuBrush : (HBRUSH)(COLOR_MENU + 1));
+    HFONT oldFont = (HFONT)SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+    int oldBkMode = SetBkMode(hdc, TRANSPARENT);
+    COLORREF oldText = SetTextColor(hdc, ThemeTextColor());
+
+    HMENU menu = GetAppMenu();
+    int count = menu ? GetMenuItemCount(menu) : 0;
+    for (int i = 0; i < count; ++i) {
+        RECT item;
+        if (!GetMenuBarItemRect(hwnd, i, &item)) continue;
+        bool selected = (i == g_menuHot || i == g_menuActive);
+        if (selected) {
+            HBRUSH hot = CreateSolidBrush(ThemeMenuHotBg());
+            FillRect(hdc, &item, hot ? hot : (HBRUSH)(COLOR_HIGHLIGHT + 1));
+            if (hot) DeleteObject(hot);
+        }
+        wchar_t text[256];
+        GetTopMenuItemText(i, text, 256);
+        DrawTextW(hdc, text, -1, &item, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+    }
+
+    HPEN sep = CreatePen(PS_SOLID, 1, ThemeBorderColor());
+    if (sep) {
+        HPEN oldPen = (HPEN)SelectObject(hdc, sep);
+        MoveToEx(hdc, rc.left, rc.bottom - 1, NULL);
+        LineTo(hdc, rc.right, rc.bottom - 1);
+        SelectObject(hdc, oldPen);
+        DeleteObject(sep);
+    }
+
+    SetTextColor(hdc, oldText);
+    SetBkMode(hdc, oldBkMode);
+    SelectObject(hdc, oldFont);
+}
+
+static void ShowMenuBarPopup(HWND hwnd, int index) {
+    if (!hwnd || index < 0) return;
+    PrepareMenuForDisplay();
+    HMENU menu = GetAppMenu();
+    if (!menu) return;
+    MENUITEMINFOW info;
+    ZeroMemory(&info, sizeof(info));
+    info.cbSize = sizeof(info);
+    info.fMask = MIIM_SUBMENU;
+    if (!GetMenuItemInfoW(menu, index, TRUE, &info) || !info.hSubMenu) return;
+
+    RECT rc;
+    if (!GetMenuBarItemRect(hwnd, index, &rc)) return;
+    POINT pt = { rc.left, rc.bottom };
+    ClientToScreen(hwnd, &pt);
+    g_menuActive = index;
+    g_menuHot = index;
+    InvalidateRect(hwnd, NULL, TRUE);
+    SetForegroundWindow(g_hwndMain ? g_hwndMain : hwnd);
+    int cmd = TrackPopupMenu(info.hSubMenu,
+        TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON,
+        pt.x, pt.y, 0, g_hwndMain ? g_hwndMain : hwnd, NULL);
+    g_menuActive = -1;
+    g_menuHot = -1;
+    InvalidateRect(hwnd, NULL, TRUE);
+    PostMessageW(g_hwndMain ? g_hwndMain : hwnd, WM_NULL, 0, 0);
+    if (cmd) OnCommand(g_hwndMain ? g_hwndMain : hwnd, cmd);
+}
+
+static bool ShowMenuBarPopupForMnemonic(HWND hwnd, wchar_t ch) {
+    if (!hwnd || !GetAppMenu()) return false;
+    int count = GetMenuItemCount(GetAppMenu());
+    for (int i = 0; i < count; ++i) {
+        wchar_t text[256];
+        GetTopMenuItemText(i, text, 256);
+        if (MenuTextHasMnemonic(text, ch)) {
+            ShowMenuBarPopup(hwnd, i);
+            return true;
+        }
+    }
+    return false;
+}
+
+static LRESULT CALLBACK MenuBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_NCHITTEST:
+        if (MainScreenPointHitsResizeBorder(g_hwndMain, lParam)) return HTTRANSPARENT;
+        break;
+    case WM_ERASEBKGND:
+        PaintMenuBarControl(hwnd, (HDC)wParam);
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        if (hdc) PaintMenuBarControl(hwnd, hdc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_MOUSEMOVE: {
+        if (g_captionHot != CAPTION_BUTTON_NONE) {
+            int oldHot = g_captionHot;
+            g_captionHot = CAPTION_BUTTON_NONE;
+            InvalidateCaptionButton(g_hwndMain, oldHot);
+        }
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        int hot = MenuBarItemFromPoint(hwnd, pt);
+        if (hot != g_menuHot) {
+            g_menuHot = hot;
+            InvalidateRect(hwnd, NULL, TRUE);
+        }
+        if (!g_trackingMenuMouse) {
+            TRACKMOUSEEVENT tme;
+            ZeroMemory(&tme, sizeof(tme));
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            TrackMouseEvent(&tme);
+            g_trackingMenuMouse = TRUE;
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        g_trackingMenuMouse = FALSE;
+        g_menuHot = -1;
+        if (g_menuActive < 0) InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
+    case WM_LBUTTONDOWN: {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        int idx = MenuBarItemFromPoint(hwnd, pt);
+        if (idx >= 0) ShowMenuBarPopup(hwnd, idx);
+        return 0;
+    }
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 static void CenterWindowOnOwner(HWND hwnd, HWND owner) {
     RECT rcOwner;
     if (owner && GetWindowRect(owner, &rcOwner)) {
@@ -1505,7 +1979,7 @@ static TabDoc* CreateEmptyTab(void) {
     doc->untitled = true;
     doc->path = xwcsdup0(L"");
     doc->title = FormatStringDup(T(L"untitled_format", L"Untitled %d"), g_untitledSerial++);
-    doc->edit = CreateEditorControl(g_hwndTab);
+    doc->edit = CreateEditorControl(g_hwndMain);
     if (!doc->edit) { FreeTabDoc(doc); return NULL; }
     SendMessageW(doc->edit, EM_SETMODIFY, FALSE, 0);
     int index = g_docs.count;
@@ -1551,7 +2025,7 @@ static void RecreateEditorForDoc(TabDoc* doc) {
         modified = (BOOL)SendMessageW(doc->edit, EM_GETMODIFY, 0, 0);
         DestroyWindow(doc->edit);
     }
-    doc->edit = CreateEditorControl(g_hwndTab);
+    doc->edit = CreateEditorControl(g_hwndMain);
     SetWindowTextW(doc->edit, text);
     SendMessageW(doc->edit, EM_SETMODIFY, modified, 0);
     SetEditorZoom(doc->edit, doc->zoomPercent);
@@ -2075,6 +2549,9 @@ static void LayoutChildren(HWND hwnd) {
     GetClientRect(hwnd, &rc);
     int clientW = max_int(0, (int)(rc.right - rc.left));
     int clientH = max_int(0, (int)(rc.bottom - rc.top));
+    int titleH = GetTitleTabHeight(hwnd);
+    int menuH = GetCustomMenuBarHeight(hwnd);
+    int captionW = GetCaptionButtonAreaWidth(hwnd);
     int statusHeight = 0;
     if (g_hwndStatus && g_statusVisible) {
         statusHeight = GetStatusBarHeight(g_hwndStatus);
@@ -2085,16 +2562,17 @@ static void LayoutChildren(HWND hwnd) {
     } else if (g_hwndStatus) {
         ShowWindow(g_hwndStatus, SW_HIDE);
     }
-    int tabHeight = max_int(0, clientH - statusHeight);
-    MoveWindow(g_hwndTab, 0, 0, clientW, tabHeight, TRUE);
-    RECT tabRc;
-    GetClientRect(g_hwndTab, &tabRc);
-    TabCtrl_AdjustRect(g_hwndTab, FALSE, &tabRc);
-    for (int i = 0; i < g_docs.count; ++i) {
-        int editW = max_int(0, (int)(tabRc.right - tabRc.left));
-        int editH = max_int(0, (int)(tabRc.bottom - tabRc.top));
-        MoveWindow(g_docs.data[i]->edit, tabRc.left, tabRc.top, editW, editH, TRUE);
+    MoveWindow(g_hwndTab, 0, 0, max_int(0, clientW - captionW), titleH, TRUE);
+    if (g_hwndMenuBar) {
+        MoveWindow(g_hwndMenuBar, 0, titleH, clientW, menuH, TRUE);
+        ShowWindow(g_hwndMenuBar, SW_SHOW);
     }
+    int editTop = titleH + menuH;
+    int editH = max_int(0, clientH - editTop - statusHeight);
+    for (int i = 0; i < g_docs.count; ++i) {
+        MoveWindow(g_docs.data[i]->edit, 0, editTop, clientW, editH, TRUE);
+    }
+    InvalidateCaptionButton(hwnd, CAPTION_BUTTON_NONE);
 }
 
 static void OnCommand(HWND hwnd, int id) {
@@ -2138,8 +2616,8 @@ static void OnCommand(HWND hwnd, int id) {
     case ID_VIEW_ZOOM_IN: DoZoom(+10); break;
     case ID_VIEW_ZOOM_OUT: DoZoom(-10); break;
     case ID_VIEW_ZOOM_RESET: DoZoom(0); break;
-    case ID_VIEW_STATUS_BAR: g_statusVisible = !g_statusVisible; LayoutChildren(hwnd); UpdateMenuChecks(GetMenu(hwnd)); break;
-    case ID_VIEW_WORD_WRAP: ToggleWordWrap(); UpdateMenuChecks(GetMenu(hwnd)); break;
+    case ID_VIEW_STATUS_BAR: g_statusVisible = !g_statusVisible; LayoutChildren(hwnd); UpdateMenuChecks(GetAppMenu()); if (g_hwndMenuBar) InvalidateRect(g_hwndMenuBar, NULL, TRUE); break;
+    case ID_VIEW_WORD_WRAP: ToggleWordWrap(); UpdateMenuChecks(GetAppMenu()); if (g_hwndMenuBar) InvalidateRect(g_hwndMenuBar, NULL, TRUE); break;
     case ID_VIEW_THEME_LIGHT: g_themeMode = THEME_LIGHT; ApplyThemeToApp(); break;
     case ID_VIEW_THEME_DARK: g_themeMode = THEME_DARK; ApplyThemeToApp(); break;
     case ID_VIEW_THEME_AUTO: g_themeMode = THEME_AUTO; ApplyThemeToApp(); break;
@@ -2152,76 +2630,25 @@ static void OnCommand(HWND hwnd, int id) {
 
 static void ApplyLanguage(void) {
     if (!g_hwndMain) return;
-    HMENU oldMenu = GetMenu(g_hwndMain);
-    SetMenu(g_hwndMain, NULL);
-    if (oldMenu) DestroyMenu(oldMenu);
-    FreeMenuDrawData();
-    HMENU newMenu = CreateMainMenu();
-    SetMenu(g_hwndMain, newMenu);
-    UpdateRecentMenu();
-    UpdateMenuChecks(newMenu);
-    ApplyThemeToMenus(newMenu);
-    DrawMenuBar(g_hwndMain);
+    RecreateMainMenu();
     UpdateStatusBar();
+    if (g_hwndMenuBar) InvalidateRect(g_hwndMenuBar, NULL, TRUE);
     RedrawWindow(g_hwndMain, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
-static void PaintMenuBarBackgroundRemainder(HWND hwnd) {
-    if (!hwnd || !ShouldUseDarkTheme()) return;
-    HMENU menu = GetMenu(hwnd);
-    if (!menu) return;
-    MENUBARINFO mbi;
-    ZeroMemory(&mbi, sizeof(mbi));
-    mbi.cbSize = sizeof(mbi);
-    if (!GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) return;
-    RECT wr;
-    GetWindowRect(hwnd, &wr);
-    RECT bar = mbi.rcBar;
-    OffsetRect(&bar, -wr.left, -wr.top);
-    if (bar.right <= bar.left || bar.bottom <= bar.top) return;
-    HDC hdc = GetWindowDC(hwnd);
-    if (!hdc) return;
-    HRGN remainder = CreateRectRgnIndirect(&bar);
-    if (remainder) {
-        int count = GetMenuItemCount(menu);
-        for (int i = 0; i < count; ++i) {
-            RECT item;
-            if (GetMenuItemRect(hwnd, menu, i, &item)) {
-                OffsetRect(&item, -wr.left, -wr.top);
-                InflateRect(&item, 1, 1);
-                HRGN itemRgn = CreateRectRgnIndirect(&item);
-                if (itemRgn) {
-                    CombineRgn(remainder, remainder, itemRgn, RGN_DIFF);
-                    DeleteObject(itemRgn);
-                }
-            }
-        }
-        SelectClipRgn(hdc, remainder);
-        FillRect(hdc, &bar, g_hMenuBrush ? g_hMenuBrush : (HBRUSH)(COLOR_MENU + 1));
-        SelectClipRgn(hdc, NULL);
-        DeleteObject(remainder);
-    }
-    ReleaseDC(hwnd, hdc);
-}
-
 static void PaintMenuTabSeam(HWND hwnd) {
-    if (!hwnd || !ShouldUseDarkTheme()) return;
-    HMENU menu = GetMenu(hwnd);
-    if (!menu) return;
-    MENUBARINFO mbi;
-    ZeroMemory(&mbi, sizeof(mbi));
-    mbi.cbSize = sizeof(mbi);
-    if (!GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) return;
-    RECT wr;
-    GetWindowRect(hwnd, &wr);
-    RECT bar = mbi.rcBar;
-    OffsetRect(&bar, -wr.left, -wr.top);
-    if (bar.right <= bar.left || bar.bottom <= bar.top) return;
-    HDC hdc = GetWindowDC(hwnd);
+    if (!hwnd || !g_hwndMenuBar) return;
+    RECT client;
+    GetClientRect(hwnd, &client);
+    RECT menuRc;
+    GetWindowRect(g_hwndMenuBar, &menuRc);
+    MapWindowPoints(NULL, hwnd, (POINT*)&menuRc, 2);
+    if (menuRc.bottom <= menuRc.top) return;
+    HDC hdc = GetDC(hwnd);
     if (!hdc) return;
-    RECT seam = bar;
-    seam.top = bar.bottom - 1;
-    seam.bottom = bar.bottom + 1;
+    RECT seam = client;
+    seam.top = menuRc.bottom - 1;
+    seam.bottom = menuRc.bottom;
     FillRect(hdc, &seam, g_hTabBrush ? g_hTabBrush : (HBRUSH)(COLOR_BTNFACE + 1));
     ReleaseDC(hwnd, hdc);
 }
@@ -2524,6 +2951,9 @@ static void ShowEditorContextMenu(HWND edit, POINT ptScreen) {
 
 static LRESULT CALLBACK ThemedEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_NCHITTEST:
+        if (MainScreenPointHitsResizeBorder(g_hwndMain, lParam)) return HTTRANSPARENT;
+        break;
     case WM_SETFOCUS: {
         LRESULT r = g_oldEditProc ? CallWindowProcW(g_oldEditProc, hwnd, msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
         UpdateBrightCaret(hwnd);
@@ -2545,6 +2975,9 @@ static LRESULT CALLBACK ThemedEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         ShowEditorContextMenu(hwnd, pt);
         return 0;
     }
+    case WM_SYSCHAR:
+        if (ShowMenuBarPopupForMnemonic(g_hwndMenuBar, (wchar_t)wParam)) return 0;
+        break;
     }
     return g_oldEditProc ? CallWindowProcW(g_oldEditProc, hwnd, msg, wParam, lParam) : DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -2552,6 +2985,32 @@ static LRESULT CALLBACK ThemedEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 static LRESULT CALLBACK ThemedTabProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if ((msg == WM_COMMAND || msg == WM_NOTIFY) && g_hwndMain) {
         return SendMessageW(g_hwndMain, msg, wParam, lParam);
+    }
+    if (msg == WM_NCHITTEST && MainScreenPointHitsResizeBorder(g_hwndMain, lParam)) return HTTRANSPARENT;
+    if (msg == WM_MOUSEMOVE && g_captionHot != CAPTION_BUTTON_NONE) {
+        int oldHot = g_captionHot;
+        g_captionHot = CAPTION_BUTTON_NONE;
+        InvalidateCaptionButton(g_hwndMain, oldHot);
+    }
+    if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (TabPointIsInDraggableTitleArea(hwnd, pt)) {
+            ClientToScreen(hwnd, &pt);
+            if (msg == WM_LBUTTONDBLCLK) {
+                SendMessageW(g_hwndMain, WM_SYSCOMMAND, IsZoomed(g_hwndMain) ? SC_RESTORE : SC_MAXIMIZE, 0);
+            } else {
+                SendMessageW(g_hwndMain, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(pt.x, pt.y));
+            }
+            return 0;
+        }
+    }
+    if (msg == WM_RBUTTONUP) {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        if (TabPointIsInDraggableTitleArea(hwnd, pt)) {
+            ClientToScreen(hwnd, &pt);
+            ShowSystemMenuAt(g_hwndMain, pt);
+            return 0;
+        }
     }
     if (msg == WM_ERASEBKGND) {
         RECT rc;
@@ -2605,6 +3064,7 @@ static LRESULT CALLBACK ThemedStatusProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         break;
     }
     case WM_NCHITTEST: {
+        if (MainScreenPointHitsResizeBorder(g_hwndMain, lParam)) return HTTRANSPARENT;
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         if (StatusBarPointInResizeGrip(hwnd, pt)) return HTBOTTOMRIGHT;
         break;
@@ -2642,11 +3102,9 @@ static void ApplyThemeToApp(void) {
         RedrawWindow(g_hwndStatus, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
     }
     if (g_hwndMain) {
-        ApplyThemeToMenus(GetMenu(g_hwndMain));
-        DrawMenuBar(g_hwndMain);
+        ApplyThemeToMenus(GetAppMenu());
+        if (g_hwndMenuBar) InvalidateRect(g_hwndMenuBar, NULL, TRUE);
         RedrawWindow(g_hwndMain, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
-        PaintMenuBarBackgroundRemainder(g_hwndMain);
-        PaintMenuTabSeam(g_hwndMain);
     }
 }
 
@@ -2656,16 +3114,109 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         return 0;
     }
     switch (msg) {
+    case WM_NCCALCSIZE:
+        if (wParam) {
+            NCCALCSIZE_PARAMS* params = (NCCALCSIZE_PARAMS*)lParam;
+            if (params && IsZoomed(hwnd)) {
+                HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi;
+                ZeroMemory(&mi, sizeof(mi));
+                mi.cbSize = sizeof(mi);
+                if (GetMonitorInfoW(mon, &mi)) params->rgrc[0] = mi.rcWork;
+            }
+            return 0;
+        }
+        break;
+    case WM_NCHITTEST:
+        return HitTestCustomFrame(hwnd, lParam);
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        if (hdc) PaintCustomTitleBar(hwnd, hdc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_MOUSEMOVE: {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        int hot = HitTestCaptionButton(hwnd, pt);
+        if (hot != g_captionHot) {
+            int oldHot = g_captionHot;
+            g_captionHot = hot;
+            InvalidateCaptionButton(hwnd, oldHot);
+            InvalidateCaptionButton(hwnd, g_captionHot);
+        }
+        if (!g_trackingMainMouse) {
+            TRACKMOUSEEVENT tme;
+            ZeroMemory(&tme, sizeof(tme));
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            TrackMouseEvent(&tme);
+            g_trackingMainMouse = TRUE;
+        }
+        break;
+    }
+    case WM_MOUSELEAVE:
+        g_trackingMainMouse = FALSE;
+        if (g_captionHot != CAPTION_BUTTON_NONE) {
+            int oldHot = g_captionHot;
+            g_captionHot = CAPTION_BUTTON_NONE;
+            InvalidateCaptionButton(hwnd, oldHot);
+        }
+        return 0;
+    case WM_LBUTTONDOWN: {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        int hit = HitTestCaptionButton(hwnd, pt);
+        if (hit != CAPTION_BUTTON_NONE) {
+            g_captionDown = hit;
+            g_captionHot = hit;
+            SetCapture(hwnd);
+            InvalidateCaptionButton(hwnd, hit);
+            return 0;
+        }
+        break;
+    }
+    case WM_LBUTTONUP: {
+        if (g_captionDown != CAPTION_BUTTON_NONE) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            int down = g_captionDown;
+            int hit = HitTestCaptionButton(hwnd, pt);
+            g_captionDown = CAPTION_BUTTON_NONE;
+            ReleaseCapture();
+            InvalidateCaptionButton(hwnd, down);
+            if (hit == down) {
+                if (down == CAPTION_BUTTON_MIN) SendMessageW(hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+                else if (down == CAPTION_BUTTON_MAX) SendMessageW(hwnd, WM_SYSCOMMAND, IsZoomed(hwnd) ? SC_RESTORE : SC_MAXIMIZE, 0);
+                else if (down == CAPTION_BUTTON_CLOSE) SendMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_CAPTURECHANGED:
+        if (g_captionDown != CAPTION_BUTTON_NONE) {
+            int down = g_captionDown;
+            g_captionDown = CAPTION_BUTTON_NONE;
+            InvalidateCaptionButton(hwnd, down);
+        }
+        break;
+    case WM_SYSCHAR:
+        if (ShowMenuBarPopupForMnemonic(g_hwndMenuBar, (wchar_t)wParam)) return 0;
+        break;
     case WM_CREATE: {
         g_hwndMain = hwnd;
         LoadRecentFiles();
-        UpdateRecentMenu();
+        RecreateMainMenu();
         EnsureDefaultFont();
         g_hwndTab = CreateWindowExW(0, WC_TABCONTROLW, L"",
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | TCS_OWNERDRAWFIXED,
             0, 0, 100, 100, hwnd, NULL, g_hInst, NULL);
         SendMessageW(g_hwndTab, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         g_oldTabProc = (WNDPROC)SetWindowLongPtrW(g_hwndTab, GWLP_WNDPROC, (LONG_PTR)ThemedTabProc);
+        g_hwndMenuBar = CreateWindowExW(0, L"PlainEditorMenuBar", L"",
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            0, 0, 100, 100, hwnd, NULL, g_hInst, NULL);
+        SendMessageW(g_hwndMenuBar, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         g_hwndStatus = CreateWindowExW(0, STATUSCLASSNAMEW, L"",
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | CCS_NODIVIDER,
             0, 0, 0, 0, hwnd, NULL, g_hInst, NULL);
@@ -2689,7 +3240,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
     }
     case WM_SIZE:
         LayoutChildren(hwnd);
-        PaintMenuTabSeam(hwnd);
+        InvalidateCaptionButton(hwnd, CAPTION_BUTTON_NONE);
         if (g_hwndStatus) RedrawWindow(g_hwndStatus, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
         return 0;
     case WM_DPICHANGED: {
@@ -2758,11 +3309,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         return 0;
     }
     case WM_INITMENUPOPUP:
-        UpdateMenuChecks(GetMenu(hwnd));
-        ApplyThemeToMenus(GetMenu(hwnd));
-        DrawMenuBar(hwnd);
-        PaintMenuBarBackgroundRemainder(hwnd);
-        PaintMenuTabSeam(hwnd);
+        UpdateMenuChecks(GetAppMenu());
+        ApplyThemeToMenus(GetAppMenu());
+        if (g_hwndMenuBar) InvalidateRect(g_hwndMenuBar, NULL, TRUE);
         return 0;
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT* dis = (DRAWITEMSTRUCT*)lParam;
@@ -2775,7 +3324,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         if (mis && mis->CtlType == ODT_MENU) { MeasureMenuItem(mis); return TRUE; }
         if (mis && mis->CtlType == ODT_TAB) {
             mis->itemWidth = (UINT)DpiScale(hwnd, 180);
-            mis->itemHeight = (UINT)max_int(DpiScale(hwnd, 24), GetSystemMetrics(SM_CYMENU) + 2);
+            mis->itemHeight = (UINT)GetTitleTabHeight(hwnd);
             return TRUE;
         }
         break;
@@ -2786,18 +3335,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         FillRect((HDC)wParam, &rc, g_hMainBrush ? g_hMainBrush : (HBRUSH)(COLOR_BTNFACE + 1));
         return 1;
     }
-    case WM_NCPAINT: {
-        LRESULT r = DefWindowProcW(hwnd, msg, wParam, lParam);
-        PaintMenuBarBackgroundRemainder(hwnd);
-        PaintMenuTabSeam(hwnd);
-        return r;
-    }
-    case WM_NCACTIVATE: {
-        LRESULT r = DefWindowProcW(hwnd, msg, wParam, lParam);
-        PaintMenuBarBackgroundRemainder(hwnd);
-        PaintMenuTabSeam(hwnd);
-        return r;
-    }
+    case WM_NCPAINT:
+        return 0;
+    case WM_NCACTIVATE:
+        RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+        return TRUE;
     case WM_SETTINGCHANGE:
         if (g_themeMode == THEME_AUTO) ApplyThemeToApp();
         return 0;
@@ -2821,6 +3363,8 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         if (g_hMenuBrush) { DeleteObject(g_hMenuBrush); g_hMenuBrush = NULL; }
         if (g_hTabBrush) { DeleteObject(g_hTabBrush); g_hTabBrush = NULL; }
         if (g_hStatusBrush) { DeleteObject(g_hStatusBrush); g_hStatusBrush = NULL; }
+        if (g_hMainMenu) { DestroyMenu(g_hMainMenu); g_hMainMenu = NULL; g_hRecentMenu = NULL; }
+        g_hwndMenuBar = NULL;
         FreeMenuDrawData();
         wvec_clear(&g_recentFiles);
         wvec_clear(&g_initialFiles);
@@ -2842,9 +3386,18 @@ static bool RegisterWindowClasses(void) {
     wc.hInstance = g_hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wc.style = CS_DBLCLKS;
     wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
     wc.lpszClassName = L"PlainEditorMainWindow";
     if (!RegisterClassW(&wc)) return false;
+    WNDCLASSW mb;
+    ZeroMemory(&mb, sizeof(mb));
+    mb.lpfnWndProc = MenuBarProc;
+    mb.hInstance = g_hInst;
+    mb.hCursor = LoadCursor(NULL, IDC_ARROW);
+    mb.hbrBackground = (HBRUSH)(COLOR_MENU + 1);
+    mb.lpszClassName = L"PlainEditorMenuBar";
+    if (!RegisterClassW(&mb)) return false;
     WNDCLASSW od;
     ZeroMemory(&od, sizeof(od));
     od.lpfnWndProc = OptionDialogProc;
@@ -2934,10 +3487,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
     CreateAccelerators();
     RebuildThemeBrushes();
-    HMENU menu = CreateMainMenu();
     HWND hwnd = CreateWindowExW(0, L"PlainEditorMainWindow", T(L"app_title", L"Win32 Tabbed Plain Text Editor"),
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, DpiScale(NULL, 920), DpiScale(NULL, 680),
-        NULL, menu, hInstance, NULL);
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT, CW_USEDEFAULT, DpiScale(NULL, 920), DpiScale(NULL, 680),
+        NULL, NULL, hInstance, NULL);
     if (!hwnd) {
         MessageBoxW(NULL, T(L"msg_create_window_failed", L"Could not create the main window."), T(L"title_error", L"Error"), MB_OK | MB_ICONERROR);
         return 1;
