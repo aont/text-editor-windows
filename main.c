@@ -2966,8 +2966,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     CreateAccelerators();
     RebuildThemeBrushes();
     HMENU menu = CreateMainMenu();
+    DWORD mainStyle = WS_OVERLAPPEDWINDOW & ~(DWORD)WS_CAPTION;
     HWND hwnd = CreateWindowExW(0, L"PlainEditorMainWindow", T(L"app_title", L"Win32 Tabbed Plain Text Editor"),
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, DpiScale(NULL, 920), DpiScale(NULL, 680),
+        mainStyle, CW_USEDEFAULT, CW_USEDEFAULT, DpiScale(NULL, 920), DpiScale(NULL, 680),
         NULL, menu, hInstance, NULL);
     if (!hwnd) {
         MessageBoxW(NULL, T(L"msg_create_window_failed", L"Could not create the main window."), T(L"title_error", L"Error"), MB_OK | MB_ICONERROR);
