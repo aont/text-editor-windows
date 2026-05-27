@@ -1,0 +1,97 @@
+Script started on 2026-05-27 18:42:33+09:00 [COMMAND="make" TERM="xterm-256color" TTY="/dev/cons6" COLUMNS="97" LINES="27"]
+[6n[6n[?1004h[m[?25hgcc -std=c11 -Wall -Wextra -o text-editor.exe main.c -lcomctl32 -lshell32
+[1mmain.c:9:[22m [35m[1mwarning: [mignoring '[1m#pragma comment [22m' [[35m]8;id=39792-1;https://gcc.gnu.org/onlinedocs/gcc-16.1.0/gcc/Warning-Options.html#index-Wno-unknown-pragmas\[1m-Wunknown-pragmas[m]8;;\][K
+    9 | #pragma comment(lib, "comctl32.lib")
+[1mmain.c:[22m In function '[1mApplyTheme[22m':[K
+[1mmain.c:84:29:[22m [31m[1merror: [m'[1mEM_SETBKGNDCOLOR[22m' undeclared (first use in this function); did you mean '[1mEM[22m
+[1m[H
+[26;97HMRSETBKCOLOR[22m'?[K
+   84 |     SendMessage(g_hwndEdit, [31m[1mEM_SETBKGNDCOLOR[m, 0, bg());[K
+      |[31m[1m[29C^~~~~~~~~~~~~~~~[m[K
+      |[32m[29CEMRSETBKCOLOR[K[m
+[1mmain.c:84:29:[22m [36m[1mnote: [meach undeclared identifier is reported only once for each function it appears
+[H
+[26;97Hs in
+[1mmain.c:[22m In function '[1mFileHook[22m':[K
+[1mmain.c:120:63:[22m [35m[1mwarning: [munused parameter '[1mw[22m' [[35m]8;id=39792-2;https://gcc.gnu.org/onlinedocs/gcc-16.1.0/gcc/Warning-Options.html#index-Wno-unused-parameter\[1m-Wunused-parameter[m]8;;\][K
+  120 | static UINT_PTR CALLBACK FileHook(HWND hdlg, UINT msg, [35m[1mWPARAM w[m, LPARAM l){[K
+      |[35m[1m[56C~~~~~~~^[m[K
+[1mmain.c:120:73:[22m [35m[1mwarning: [munused parameter '[1ml[22m' [[35m]8;id=39792-3;https://gcc.gnu.org/onlinedocs/gcc-16.1.0/gcc/Warning-Options.html#index-Wno-unused-parameter\[1m-Wunused-parameter[m]8;;\][K
+  120 | static UINT_PTR CALLBACK FileHook(HWND hdlg, UINT msg, WPARAM w, [35m[1mLPARAM l[m){[K
+      |[35m[1m[66C~~~~~~~^[m[K
+[1mmain.c:[22m In function '[1mWndProc[22m':[K
+[1mmain.c:166:114:[22m [31m[1merror: [m'[1mEM_REDO[22m' undeclared (first use in this function); did you mean '[1mEM_UNDO[22m'?[H
+[27;97H
+  166 |         case ID_EDIT_UNDO: SendMessage(g_hwndEdit,WM_UNDO,0,0); break; case ID_EDIT_REDO:
+[H
+[26;97H: SendMessage(g_hwndEdit,[31m[1mEM_REDO[m,0,0); break; case ID_EDIT_CUT: SendMessage(g_hwndEdit,WM_CUT,0,0)
+[H
+[26;97H); break;
+      |                                                                                          [H
+[27;188H
+[31m[1m[24C^~~~~~~[m[K
+      |                                                                                          [H
+[27;188H
+[32m[24CEM_UNDO[K[m
+[1mmain.c:177:353:[22m [31m[1merror: [mimplicit declaration of function '[1mGET_X_LPARAM[22m'; did you mean '[1mGET_SC_WPAR[22m
+[1m[H
+[26;97HRAM[22m'? [[31m]8;id=39792-4;https://gcc.gnu.org/onlinedocs/gcc-16.1.0/gcc/Warning-Options.html#index-Wimplicit-function-declaration\[1m-Wimplicit-function-declaration[m]8;;\][K
+  177 |     case WM_CONTEXTMENU: if((HWND)w==g_hwndEdit){ HMENU m=CreatePopupMenu(); AppendMenuA(
+[H
+[26;97H(m,MF_STRING,ID_EDIT_UNDO,"Undo"); AppendMenuA(m,MF_STRING,ID_EDIT_CUT,"Cut"); AppendMenuA(m,MF_ST
+[H
+[26;97HTRING,ID_EDIT_COPY,"Copy"); AppendMenuA(m,MF_STRING,ID_EDIT_PASTE,"Paste"); AppendMenuA(m,MF_STRIN
+[H
+[26;97HNG,ID_EDIT_SELECT_ALL,"Select All"); TrackPopupMenu(m,TPM_RIGHTBUTTON,[31m[1mGET_X_LPARAM[m(l),GET_Y_LPARAM
+[H
+[26;97HM(l),0,hwnd,NULL); DestroyMenu(m);} break;
+      |                                                                                          [H
+[27;188H
+                                                                                                 [H
+[27;195H
+                                                                                                 [H
+[27;195H
+[31m[1m[69C^~~~~~~~~~~~[m[K
+      |                                                                                          [H
+[27;188H
+                                                                                                 [H
+[27;195H
+                                                                                                 [H
+[27;195H
+[32m[69CGET_SC_WPARAM[K[m
+[1mmain.c:177:369:[22m [31m[1merror: [mimplicit declaration of function '[1mGET_Y_LPARAM[22m'; did you mean '[1mGET_SC_WPAR[22m
+[1m[H
+[26;97HRAM[22m'? [[31m]8;id=39792-5;https://gcc.gnu.org/onlinedocs/gcc-16.1.0/gcc/Warning-Options.html#index-Wimplicit-function-declaration\[1m-Wimplicit-function-declaration[m]8;;\][K
+  177 |     case WM_CONTEXTMENU: if((HWND)w==g_hwndEdit){ HMENU m=CreatePopupMenu(); AppendMenuA(
+[H
+[26;97H(m,MF_STRING,ID_EDIT_UNDO,"Undo"); AppendMenuA(m,MF_STRING,ID_EDIT_CUT,"Cut"); AppendMenuA(m,MF_ST
+[H
+[26;97HTRING,ID_EDIT_COPY,"Copy"); AppendMenuA(m,MF_STRING,ID_EDIT_PASTE,"Paste"); AppendMenuA(m,MF_STRIN
+[H
+[26;97HNG,ID_EDIT_SELECT_ALL,"Select All"); TrackPopupMenu(m,TPM_RIGHTBUTTON,GET_X_LPARAM(l),[31m[1mGET_Y_LPARA[m(
+[H
+[26;97H(l),0,hwnd,NULL); DestroyMenu(m);} break;
+      |                                                                                          [H
+[27;188H
+                                                                                                 [H
+[27;195H
+                                                                                                 [H
+[27;195H
+[31m[1m[85C^~~~~~~~~~~[m [H
+[27;97H
+      |                                                                                          [H
+[27;188H
+                                                                                                 [H
+[27;195H
+                                                                                                 [H
+[27;195H
+                                                                                     [32mGET_SC_WPARA[m
+[32m[H
+[26;97HAM[m
+[1mmain.c:[22m At top level:[K
+[1mmain.c:64:14:[22m [35m[1mwarning: [m'[1mg_font[22m' defined but not used [[35m]8;id=39792-6;https://gcc.gnu.org/onlinedocs/gcc-16.1.0/gcc/Warning-Options.html#index-Wno-unused-variable\[1m-Wunused-variable[m]8;;\][K
+   64 | static HFONT [35m[1mg_font[m;[K
+      |[35m[1m[14C^~~~~~[m[K
+make: *** [Makefile:8: text-editor.exe] Error 1
+[?9001l[?1004l
+Script done on 2026-05-27 18:42:35+09:00 [COMMAND_EXIT_CODE="2"]
