@@ -265,3 +265,8 @@ int WINAPI wWinMain(HINSTANCE hInst,HINSTANCE p,LPWSTR c,int n){
     ShowWindow(hwnd,n);
     MSG msg; while(GetMessageW(&msg,NULL,0,0)){ TranslateMessage(&msg); DispatchMessageW(&msg);} return (int)msg.wParam;
 }
+
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE p, LPSTR c, int n){
+    (void)c;
+    return wWinMain(hInst, p, GetCommandLineW(), n);
+}
