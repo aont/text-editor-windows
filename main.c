@@ -7,6 +7,7 @@
 #include <uxtheme.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <windowsx.h>
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -89,9 +90,7 @@ static BOOL SystemPrefersDark(void){
 static void UpdateTheme(HWND hwnd){
     g_themeDark = (g_themeMode==THEME_DARK) || (g_themeMode==THEME_AUTO && SystemPrefersDark());
     COLORREF bg = g_themeDark?RGB(30,30,30):RGB(250,250,250);
-    COLORREF fg = g_themeDark?RGB(230,230,230):RGB(20,20,20);
-    SendMessageW(g_hwndEdit, EM_SETBKGNDCOLOR, 0, bg);
-    SendMessageW(g_hwndEdit, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&(CHARFORMAT2W){.cbSize=sizeof(CHARFORMAT2W), .dwMask=CFM_COLOR, .crTextColor=fg});
+    (void)bg;
     InvalidateRect(hwnd,NULL,TRUE);
 }
 
@@ -161,6 +160,18 @@ static HMENU BuildMenu(void){
     AppendMenuW(view,MF_POPUP,(UINT_PTR)zoom,L"Zoom");AppendMenuW(view,MF_STRING|MF_CHECKED,IDM_VIEW_STATUS_BAR,L"Status Bar");AppendMenuW(view,MF_STRING,IDM_VIEW_WORD_WRAP,L"Word Wrap");AppendMenuW(view,MF_POPUP,(UINT_PTR)theme,L"App Theme");
     AppendMenuW(m,MF_POPUP,(UINT_PTR)file,L"File");AppendMenuW(m,MF_POPUP,(UINT_PTR)edit,L"Edit");AppendMenuW(m,MF_POPUP,(UINT_PTR)view,L"View");
     return m;
+}
+
+
+static void EnableDpiAwareness(void){
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if(!user32) return;
+
+    typedef BOOL (WINAPI *SetDpiAwarenessContextFn)(HANDLE);
+    SetDpiAwarenessContextFn setCtx = (SetDpiAwarenessContextFn)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+    if(setCtx){
+        setCtx((HANDLE)-4); /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 */
+    }
 }
 
 static void PaintCustomBars(HWND hwnd, HDC hdc){
@@ -245,7 +256,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam){
 int WINAPI wWinMain(HINSTANCE hInst,HINSTANCE p,LPWSTR c,int n){
     (void)p;(void)c;
     g_hInst=hInst;
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    EnableDpiAwareness();
     INITCOMMONCONTROLSEX ic={sizeof(ic),ICC_STANDARD_CLASSES}; InitCommonControlsEx(&ic);
     WNDCLASSW wc={0}; wc.lpfnWndProc=WndProc; wc.hInstance=hInst; wc.hCursor=LoadCursor(NULL,IDC_ARROW); wc.lpszClassName=L"PlainEditorWin32";
     RegisterClassW(&wc);
